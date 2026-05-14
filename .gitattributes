@@ -1,0 +1,44 @@
+# Auto normalize line endings
+* text=auto
+
+# Force LF for scripts and python
+*.py text eol=lf
+*.sh text eol=lf
+
+# Mark common binary formats
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary
+*.tar.xz binary
+*.gz binary
+*.bz2 binary
+*.mp4 binary
+*.mov binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.h5 binary
+*.pt binary
+*.pth binary
+*.ckpt binary
+*.pkl binary
+*.pickle binary
+
+# CSV as text for diffs
+*.csv text diff
+
+# IPython notebooks - prefer simple merge strategy
+*.ipynb merge=union
+
+# Prevent exported archives from including artifacts
+/artifacts/** export-ignore
+
+# Docs and markdown
+*.md text
+docs/** text
