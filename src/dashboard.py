@@ -6,7 +6,16 @@ import math
 import time
 import io
 from pathlib import Path
-from sklearn.preprocessing import StandardScaler
+
+ROOT = Path(__file__).resolve().parent.parent
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_auc_score,
+)
+from sklearn.preprocessing import LabelBinarizer
 
 st.set_page_config(page_title="AI NIDS Dashboard", layout="wide")
 
@@ -58,7 +67,7 @@ def get_feature_importance_df(model, feature_names: list[str]) -> pd.DataFrame |
 
 
 def list_local_csv_files() -> list[str]:
-    roots = [Path("data/raw"), Path("data/raw/MachineLearningCVE")]
+    roots = [ROOT / "data/raw", ROOT / "data/raw/MachineLearningCVE"]
     csv_files: list[str] = []
     for root in roots:
         if root.exists():
@@ -72,37 +81,18 @@ def read_uploaded_csv(uploaded_file) -> pd.DataFrame:
 
 @st.cache_resource
 def load_model():
-    return joblib.load("artifacts/models/model.pkl")
+    return joblib.load(ROOT / "artifacts/models/model.pkl")
 
 @st.cache_resource
-def load_reference_preprocessor():
-    reference_path = Path("data/processed/combined_dataset.csv")
-    if not reference_path.exists():
+def load_scaler():
+    scaler_path = ROOT / "artifacts/models/scaler.pkl"
+    features_path = ROOT / "artifacts/models/feature_columns.pkl"
+    if not scaler_path.exists() or not features_path.exists():
         return None, None, (
-            "Reference dataset 'data/processed/combined_dataset.csv' not found. "
-            "Predictions will run without training-time scaling."
+            "Scaler or feature columns not found. "
+            "Run train_model.py first to generate artifacts/models/scaler.pkl."
         )
-
-    try:
-        reference_data = pd.read_csv(reference_path)
-        reference_data = clean_data(reference_data)
-        label_column = resolve_label_column(reference_data.columns)
-
-        if label_column is None:
-            return None, None, (
-                "Reference dataset does not contain a 'Label' column. "
-                "Predictions will run without training-time scaling."
-            )
-
-        feature_columns = [col for col in reference_data.columns if col != label_column]
-        scaler = StandardScaler()
-        scaler.fit(reference_data[feature_columns])
-        return scaler, feature_columns, None
-    except Exception as exc:
-        return None, None, (
-            "Could not build the reference preprocessor from data/processed/combined_dataset.csv: "
-            f"{exc}. Predictions will run without training-time scaling."
-        )
+    return joblib.load(scaler_path), joblib.load(features_path), None
 
 def prepare_predictions(
     raw_data: pd.DataFrame,
@@ -269,9 +259,59 @@ def render_prediction_tab(result: dict, model):
         )
         st.dataframe(comparison.head(20))
 
-        accuracy = (comparison["Actual Label"] == comparison["Prediction"]).mean()
-        st.subheader("Quick Accuracy on Uploaded File")
-        st.metric("Accuracy", f"{accuracy:.4f}")
+        st.subheader("Evaluation Metrics")
+        y_true_str = y_true.astype(str)
+        predictions_str = pd.Series(predictions, index=y_true.index).astype(str)
+
+        accuracy = (y_true_str == predictions_str).mean()
+        report_dict = classification_report(y_true_str, predictions_str, output_dict=True, zero_division=0)
+        report_df = pd.DataFrame(report_dict).T
+        report_df = report_df.drop(index=[c for c in ["accuracy", "macro avg", "weighted avg"] if c in report_df.index], errors="ignore")
+        report_df = report_df[["precision", "recall", "f1-score", "support"]].round(4)
+
+        macro_f1 = report_dict.get("macro avg", {}).get("f1-score", None)
+        weighted_f1 = report_dict.get("weighted avg", {}).get("f1-score", None)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Accuracy", f"{accuracy:.4f}")
+        if macro_f1 is not None:
+            c2.metric("Macro F1", f"{macro_f1:.4f}")
+        if weighted_f1 is not None:
+            c3.metric("Weighted F1", f"{weighted_f1:.4f}")
+
+        try:
+            lb = LabelBinarizer()
+            y_bin = lb.fit_transform(y_true_str)
+            pred_bin = lb.transform(predictions_str)
+            if y_bin.shape[1] > 1:
+                auc = roc_auc_score(y_bin, pred_bin, average="macro", multi_class="ovr")
+                st.metric("Macro AUC-ROC", f"{auc:.4f}")
+        except Exception:
+            pass
+
+        st.markdown("**Per-Class Metrics (Precision / Recall / F1)**")
+        st.dataframe(report_df, use_container_width=True)
+
+        st.markdown("**Confusion Matrix**")
+        labels = sorted(y_true_str.unique())
+        cm = confusion_matrix(y_true_str, predictions_str, labels=labels)
+        fig, ax = plt.subplots(figsize=(max(6, len(labels)), max(5, len(labels) - 1)))
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=labels,
+            yticklabels=labels,
+            ax=ax,
+        )
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+        plt.xticks(rotation=45, ha="right", fontsize=8)
+        plt.yticks(rotation=0, fontsize=8)
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
     else:
         st.subheader("Evaluation")
         st.write("No label column detected, so accuracy metrics are skipped.")
@@ -382,7 +422,7 @@ def run_live_simulation(result_data: pd.DataFrame, batch_size: int, max_batches:
 
 
 model = load_model()
-scaler, expected_features, preprocessor_warning = load_reference_preprocessor()
+scaler, expected_features, preprocessor_warning = load_scaler()
 
 tab_predict, tab_simulation = st.tabs(["Prediction Dashboard", "Live Simulation"])
 

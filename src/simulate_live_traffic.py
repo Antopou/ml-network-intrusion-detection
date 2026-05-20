@@ -7,7 +7,6 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 
 
 def clean_data(data: pd.DataFrame) -> pd.DataFrame:
@@ -26,33 +25,15 @@ def resolve_label_column(columns: pd.Index) -> str | None:
     return None
 
 
-def load_reference_preprocessor(reference_path: Path):
-    if not reference_path.exists():
+def load_scaler(model_dir: Path = Path("artifacts/models")):
+    scaler_path = model_dir / "scaler.pkl"
+    features_path = model_dir / "feature_columns.pkl"
+    if not scaler_path.exists() or not features_path.exists():
         return None, None, (
-            f"Reference dataset '{reference_path}' not found. "
-            "Simulation will run without training-time scaling."
+            f"Scaler not found at {scaler_path}. "
+            "Run train_model.py first."
         )
-
-    try:
-        reference_data = pd.read_csv(reference_path)
-        reference_data = clean_data(reference_data)
-        label_column = resolve_label_column(reference_data.columns)
-
-        if label_column is None:
-            return None, None, (
-                "Reference dataset does not contain a Label column. "
-                "Simulation will run without training-time scaling."
-            )
-
-        feature_columns = [column for column in reference_data.columns if column != label_column]
-        scaler = StandardScaler()
-        scaler.fit(reference_data[feature_columns])
-        return scaler, feature_columns, None
-    except Exception as exc:
-        return None, None, (
-            "Could not build reference preprocessor. "
-            f"Simulation will run without scaling. Details: {exc}"
-        )
+    return joblib.load(scaler_path), joblib.load(features_path), None
 
 
 def validate_schema(X_raw: pd.DataFrame, expected_features: list[str]):
@@ -69,7 +50,7 @@ def format_percent(value: float | None) -> str:
 
 def run_simulation(args):
     model = joblib.load(args.model)
-    scaler, expected_features, preprocessor_warning = load_reference_preprocessor(Path(args.reference_csv))
+    scaler, expected_features, preprocessor_warning = load_scaler()
 
     if preprocessor_warning:
         print(f"[WARN] {preprocessor_warning}")
@@ -238,11 +219,6 @@ def build_parser():
         "--model",
         default="artifacts/models/model.pkl",
         help="Path to trained model file.",
-    )
-    parser.add_argument(
-        "--reference-csv",
-        default="data/processed/combined_dataset.csv",
-        help="Reference dataset used to rebuild preprocessing (feature order + scaling).",
     )
     parser.add_argument(
         "--batch-size",
