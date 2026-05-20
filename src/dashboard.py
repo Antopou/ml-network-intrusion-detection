@@ -424,7 +424,7 @@ def run_live_simulation(result_data: pd.DataFrame, batch_size: int, max_batches:
 model = load_model()
 scaler, expected_features, preprocessor_warning = load_scaler()
 
-tab_predict, tab_simulation = st.tabs(["Prediction Dashboard", "Live Simulation"])
+tab_predict, tab_simulation, tab_model = st.tabs(["Prediction Dashboard", "Live Simulation", "Model Performance"])
 
 with tab_predict:
     st.caption("Use this tab for standard prediction analysis on uploaded CSV files.")
@@ -519,3 +519,111 @@ with tab_simulation:
 
         except Exception as exc:
             st.error(f"Error running simulation: {exc}")
+
+with tab_model:
+    st.caption("Model selection evidence and feature analysis — use this tab during your defense.")
+
+    # --- Model Comparison Table ---
+    st.subheader("Model Comparison")
+    comparison_path = ROOT / "artifacts/logs/model_comparison.csv"
+    if comparison_path.exists():
+        comp_df = pd.read_csv(comparison_path)
+        best_idx = comp_df["macro_f1"].idxmax()
+
+        def highlight_best(row):
+            return ["background-color: #1a472a" if row.name == best_idx else "" for _ in row]
+
+        st.dataframe(comp_df.style.apply(highlight_best, axis=1), use_container_width=True)
+
+        best_model_name = comp_df.loc[best_idx, "model"]
+        best_macro_f1 = comp_df.loc[best_idx, "macro_f1"]
+        best_cv_mean = comp_df.loc[best_idx, "cv_weighted_f1_mean"]
+        best_cv_std = comp_df.loc[best_idx, "cv_weighted_f1_std"]
+
+        st.success(
+            f"Selected model: **{best_model_name}** — "
+            f"Macro F1: {best_macro_f1:.4f} | "
+            f"CV Weighted F1: {best_cv_mean:.4f} ± {best_cv_std:.4f}"
+        )
+
+        st.markdown("**Why this model was selected:**")
+        st.markdown(
+            f"- Highest Macro F1 ({best_macro_f1:.4f}) — best balance across all 15 attack types including rare ones\n"
+            f"- Cross-validation std of ±{best_cv_std:.4f} confirms results are stable, not due to a lucky split\n"
+            f"- `class_weight='balanced'` ensures rare classes (Heartbleed: 11 samples) receive equal training weight"
+        )
+
+        # Bar chart comparison
+        st.subheader("Accuracy vs Macro F1 vs Weighted F1")
+        chart_df = comp_df.set_index("model")[["accuracy", "macro_f1", "weighted_f1"]]
+        st.bar_chart(chart_df)
+    else:
+        st.warning("No model comparison found. Run `python src/compare_models.py` first.")
+
+    st.divider()
+
+    # --- Feature Importance ---
+    st.subheader("Top 20 Most Important Features")
+    feature_columns_path = ROOT / "artifacts/models/feature_columns.pkl"
+    if feature_columns_path.exists():
+        feat_cols = joblib.load(feature_columns_path)
+        if hasattr(model, "feature_importances_") and len(model.feature_importances_) == len(feat_cols):
+            imp_df = pd.DataFrame({
+                "Feature": feat_cols,
+                "Importance": model.feature_importances_
+            }).sort_values("Importance", ascending=False).head(20)
+
+            st.dataframe(imp_df, use_container_width=True)
+
+            col_chart, col_gap = st.columns([2, 1])
+            with col_chart:
+                fig, ax = plt.subplots(figsize=(7, 6))
+                sns.barplot(data=imp_df, x="Importance", y="Feature", palette="Blues_r", ax=ax)
+                ax.set_title("Top 20 Feature Importances", fontweight="bold", fontsize=11)
+                ax.set_xlabel("Importance Score")
+                ax.tick_params(labelsize=8)
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close(fig)
+
+            st.markdown(
+                "**Top 3 features explained:**\n"
+                "- **Destination Port** — attacks target specific ports (e.g. port 21 for FTP brute force, port 80 for web attacks)\n"
+                "- **Bwd Packet Length Max** — attack responses have abnormal packet sizes vs normal server replies\n"
+                "- **Average Packet Size** — DoS floods and port scans produce distinct packet size patterns"
+            )
+    else:
+        st.warning("Feature columns not found. Run `python src/train_model.py` first.")
+
+    st.divider()
+
+    # --- Saved Charts from EDA ---
+    st.subheader("Dataset Analysis Charts")
+
+    row1_col1, row1_col2 = st.columns([3, 1])
+    with row1_col1:
+        p = ROOT / "docs/class_distribution.png"
+        if p.exists():
+            st.image(str(p), caption="Class Distribution (all 15 classes)", use_container_width=True)
+        else:
+            st.info("class_distribution.png not found — run the EDA notebook.")
+    with row1_col2:
+        p = ROOT / "docs/benign_vs_attacks.png"
+        if p.exists():
+            st.image(str(p), caption="BENIGN vs Attack Traffic", use_container_width=True)
+        else:
+            st.info("benign_vs_attacks.png not found — run the EDA notebook.")
+
+    row2_col1, row2_col2 = st.columns(2)
+    with row2_col1:
+        p = ROOT / "docs/feature_ranges.png"
+        if p.exists():
+            st.image(str(p), caption="Feature Value Ranges (justifies StandardScaler)", use_container_width=True)
+        else:
+            st.info("feature_ranges.png not found — run the EDA notebook.")
+    with row2_col2:
+        p = ROOT / "docs/model_comparison.png"
+        if p.exists():
+            st.image(str(p), caption="Model Comparison (Decision Tree vs Extra Trees vs Random Forest)", use_container_width=True)
+        else:
+            st.info("model_comparison.png not found — run the EDA notebook.")
